@@ -1,7 +1,10 @@
 use anyhow::{bail, Context, Result};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
-use clap::{Parser, Subcommand};
-use std::process::{Command, ExitStatus};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, Shell};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // -----------------------------------------------------------------------------
 // CLI STYLING
@@ -13,61 +16,146 @@ const MY_STYLES: Styles = Styles::styled()
     .literal(AnsiColor::Cyan.on_default());
 
 // -----------------------------------------------------------------------------
-// CLI DEFINITION
+// CLI
 // -----------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(
-    name = "ff",
-    bin_name = "ff",
-    version,
-    about = "Practical ffmpeg wrapper",
-    styles = MY_STYLES
-)]
+#[command(name = "ff", version, about = "Practical ffmpeg wrapper", styles = MY_STYLES)]
 struct Cli {
+    /// Overwrite output files without asking (passes `-y` to ffmpeg).
+    ///
+    /// If not provided, ffmpeg's native interactive prompt is shown.
+    #[arg(long, global = true)]
+    force: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Split a video into video-only and audio-only files
-    Split {
-        input: String,
-        video_output: String,
-        audio_output: String,
-    },
-
-    /// Extract audio from a video
+    /// Extract audio track from a media file.
+    #[command(
+        override_usage = "ff extract <INPUT> [OUTPUT]",
+        after_help = "\
+Examples:
+  ff extract video.mp4
+  ff extract video.mp4 audio.mp3
+"
+    )]
     Extract {
+        /// Input media file (video or audio/video container).
         input: String,
-        output: String,
+
+        /// Optional output MP3 file.
+        ///
+        /// Default: `<INPUT_BASENAME>.mp3`
+        output: Option<String>,
     },
 
-    /// Join separate video and audio into one file
-    Join {
+    /// Split into separate video-only and audio-only files.
+    #[command(
+        override_usage = "ff split <INPUT> [VIDEO_OUTPUT] [AUDIO_OUTPUT]",
+        after_help = "\
+Examples:
+  ff split movie.mp4
+  ff split movie.mp4 video.mp4 audio.mp3
+"
+    )]
+    Split {
+        /// Input media file.
+        input: String,
+
+        /// Optional video-only output.
+        ///
+        /// Default: `<INPUT_BASENAME>_split.<original extension>`
+        video_output: Option<String>,
+
+        /// Optional audio-only output.
+        ///
+        /// Default: `<INPUT_BASENAME>_split.mp3`
+        audio_output: Option<String>,
+    },
+
+    /// Merge a video file and an audio file into one container.
+    #[command(
+        override_usage = "ff merge <VIDEO> <AUDIO> [OUTPUT]",
+        after_help = "\
+Examples:
+  ff merge video.mp4 audio.m4a
+  ff merge v.mp4 a.flac final.mp4
+"
+    )]
+    Merge {
+        /// Video stream source.
         video: String,
+
+        /// Audio stream source.
         audio: String,
-        output: String,
+
+        /// Optional merged output file.
+        ///
+        /// Default: `<VIDEO_BASENAME>_merged.<video extension>`
+        output: Option<String>,
     },
 
-    /// Crop a section of media
-    ///
-    /// By default performs precise trimming (re-encoding).
-    /// Use --copy for fast keyframe-aligned trimming.
-    Crop {
-        input: String,
-        output: String,
+    /// Crop a time range from a media file.
+    #[command(
+        override_usage = "ff crop <INPUT> [OUTPUT] -s <START> -e <END> [--copy]",
+        after_help = "\
+By default this performs precise trimming (re-encoding).
+Use --copy for fast keyframe-aligned trimming without re-encoding.
 
-        #[arg(short, long, help = "Start time (HH:MM:SS)")]
+Examples:
+  ff crop input.mp4 -s 00:01:00 -e 00:02:00
+  ff crop input.mp4 out.mp4 -s 00:00:10 -e 00:00:20
+  ff crop input.mp4 -s 00:01:00 -e 00:02:00 --copy
+"
+    )]
+    Crop {
+        /// Input media file.
+        input: String,
+
+        /// Optional output file.
+        ///
+        /// Default: `<INPUT_BASENAME>_cropped.<original extension>`
+        output: Option<String>,
+
+        /// Start timestamp (HH:MM:SS).
+        #[arg(short, long)]
         start: String,
 
-        #[arg(short, long, help = "End time (HH:MM:SS)")]
+        /// End timestamp (HH:MM:SS).
+        #[arg(short, long)]
         end: String,
 
-        #[arg(long, help = "Fast mode (no re-encode, keyframe aligned)")]
+        /// Fast mode (no re-encode, cuts only on keyframes).
+        #[arg(long)]
         copy: bool,
     },
+
+    /// Generate shell completions.
+    #[command(
+        override_usage = "ff completions <SHELL>",
+        after_help = "\
+For Git Bash use:
+  ff completions bash > ~/.ff-complete.sh
+  echo 'source ~/.ff-complete.sh' >> ~/.bashrc
+"
+    )]
+    Completions {
+        /// Target shell.
+        #[arg(value_enum)]
+        shell: CompletionShell,
+    },
+}
+
+#[derive(ValueEnum, Clone)]
+enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+    PowerShell,
 }
 
 // -----------------------------------------------------------------------------
@@ -78,50 +166,65 @@ fn main() -> Result<()> {
     ensure_ffmpeg_installed()?;
 
     let cli = Cli::parse();
-    cli.command.execute()?;
+
+    match &cli.command {
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            generate(map_shell(shell), &mut cmd, "ff", &mut io::stdout());
+            return Ok(());
+        }
+        _ => cli.command.execute(cli.force)?,
+    }
 
     println!("✅ Done!");
     Ok(())
 }
 
 // -----------------------------------------------------------------------------
-// COMMAND EXECUTION
+// EXECUTION
 // -----------------------------------------------------------------------------
 
 impl Commands {
-    fn execute(&self) -> Result<()> {
+    fn execute(&self, force: bool) -> Result<()> {
         match self {
+            Commands::Extract { input, output } => {
+                let output = output.clone().unwrap_or_else(|| replace_ext(input, "mp3"));
+
+                Ffmpeg::new(force)
+                    .args(["-i", input])
+                    .args(["-vn", "-acodec", "libmp3lame", "-q:a", "2", &output])
+                    .run()
+            }
+
             Commands::Split {
                 input,
                 video_output,
                 audio_output,
             } => {
-                println!("🪓 Splitting '{input}'...");
-                Ffmpeg::new()
+                let video_out =
+                    video_output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_split"));
+                let audio_out =
+                    audio_output.clone().unwrap_or_else(|| postfix_with_ext(input, "_split", "mp3"));
+
+                Ffmpeg::new(force)
                     .args(["-i", input])
-                    .args(["-c:v", "copy", "-an", video_output])
-                    .args(["-c:a", "libmp3lame", "-q:a", "2", "-vn", audio_output])
+                    .args(["-c:v", "copy", "-an", &video_out])
+                    .args(["-c:a", "libmp3lame", "-q:a", "2", "-vn", &audio_out])
                     .run()
             }
 
-            Commands::Extract { input, output } => {
-                println!("🎵 Extracting audio...");
-                Ffmpeg::new()
-                    .args(["-i", input])
-                    .args(["-vn", "-acodec", "libmp3lame", "-q:a", "2", output])
-                    .run()
-            }
-
-            Commands::Join {
+            Commands::Merge {
                 video,
                 audio,
                 output,
             } => {
-                println!("🔗 Joining streams...");
-                Ffmpeg::new()
+                let output =
+                    output.clone().unwrap_or_else(|| postfix_with_same_ext(video, "_merged"));
+
+                Ffmpeg::new(force)
                     .args(["-i", video])
                     .args(["-i", audio])
-                    .args(["-c", "copy", "-map", "0:v:0", "-map", "1:a:0", output])
+                    .args(["-c", "copy", "-map", "0:v:0", "-map", "1:a:0", &output])
                     .run()
             }
 
@@ -135,18 +238,17 @@ impl Commands {
                 validate_time(start)?;
                 validate_time(end)?;
 
+                let output =
+                    output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_cropped"));
+
                 if *copy {
-                    println!("⚡ Fast crop (stream copy) {start} → {end}");
-                    // Fast seek MUST place -ss before input
-                    Ffmpeg::new()
+                    Ffmpeg::new(force)
                         .args(["-ss", start, "-to", end])
                         .args(["-i", input])
-                        .args(["-c", "copy", "-avoid_negative_ts", "1", output])
+                        .args(["-c", "copy", "-avoid_negative_ts", "1", &output])
                         .run()
                 } else {
-                    println!("🎯 Precise crop (re-encode) {start} → {end}");
-                    // Accurate seek MUST place -ss after input
-                    Ffmpeg::new()
+                    Ffmpeg::new(force)
                         .args(["-i", input])
                         .args(["-ss", start, "-to", end])
                         .args([
@@ -160,17 +262,19 @@ impl Commands {
                             "aac",
                             "-movflags",
                             "+faststart",
-                            output,
+                            &output,
                         ])
                         .run()
                 }
             }
+
+            Commands::Completions { .. } => unreachable!(),
         }
     }
 }
 
 // -----------------------------------------------------------------------------
-// FFMPEG BUILDER (avoids &[&str] soup)
+// FFMPEG BUILDER
 // -----------------------------------------------------------------------------
 
 struct Ffmpeg {
@@ -178,13 +282,12 @@ struct Ffmpeg {
 }
 
 impl Ffmpeg {
-    fn new() -> Self {
-        Self { args: Vec::new() }
-    }
-
-    fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.args.push(arg.into());
-        self
+    fn new(force: bool) -> Self {
+        let mut args = Vec::new();
+        if force {
+            args.push("-y".into());
+        }
+        Self { args }
     }
 
     fn args<I, S>(mut self, args: I) -> Self
@@ -202,7 +305,11 @@ impl Ffmpeg {
             .status()
             .context("Failed to start ffmpeg")?;
 
-        ensure_success(status)
+        if status.success() {
+            Ok(())
+        } else {
+            bail!("ffmpeg exited with an error.")
+        }
     }
 }
 
@@ -217,18 +324,52 @@ fn ensure_ffmpeg_installed() -> Result<()> {
     Ok(())
 }
 
-fn ensure_success(status: ExitStatus) -> Result<()> {
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("ffmpeg exited with an error.");
-    }
-}
-
-/// Minimal validation to catch obvious mistakes early.
 fn validate_time(t: &str) -> Result<()> {
     if !t.contains(':') {
-        bail!("Invalid time '{t}'. Expected HH:MM:SS format.");
+        bail!("Invalid time '{t}', expected HH:MM:SS.");
     }
     Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// FILENAME HELPERS
+// -----------------------------------------------------------------------------
+
+fn replace_ext(input: &str, new_ext: &str) -> String {
+    Path::new(input)
+        .with_extension(new_ext)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn postfix_with_same_ext(input: &str, postfix: &str) -> String {
+    let path = Path::new(input);
+    let stem = path.file_stem().unwrap().to_string_lossy();
+    let ext = path.extension().unwrap_or_default().to_string_lossy();
+    build_filename(path, &format!("{stem}{postfix}"), &ext)
+}
+
+fn postfix_with_ext(input: &str, postfix: &str, ext: &str) -> String {
+    let path = Path::new(input);
+    let stem = path.file_stem().unwrap().to_string_lossy();
+    build_filename(path, &format!("{stem}{postfix}"), ext)
+}
+
+fn build_filename(base: &Path, stem: &str, ext: &str) -> String {
+    let mut new = PathBuf::from(base.parent().unwrap_or(Path::new("")));
+    new.push(format!("{stem}.{ext}"));
+    new.to_string_lossy().into_owned()
+}
+
+// -----------------------------------------------------------------------------
+// COMPLETION MAPPING
+// -----------------------------------------------------------------------------
+
+fn map_shell(shell: &CompletionShell) -> Shell {
+    match shell {
+        CompletionShell::Bash => Shell::Bash,
+        CompletionShell::Zsh => Shell::Zsh,
+        CompletionShell::Fish => Shell::Fish,
+        CompletionShell::PowerShell => Shell::PowerShell,
+    }
 }
