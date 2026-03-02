@@ -125,15 +125,15 @@ Examples:
     /// Crop a time range from a media file.
     #[command(
         verbatim_doc_comment,
-        override_usage = "ff crop <INPUT> [OUTPUT] -s <START> -e <END> [--copy]",
+        override_usage = "ff crop [-s <START>] [-e <END>] [--copy] <INPUT> [OUTPUT]",
         after_help = "\
 By default this performs precise trimming (re-encoding).
 Use --copy for fast keyframe-aligned trimming without re-encoding.
 
 Examples:
-  ff crop input.mp4 -e 00:02:00
-  ff crop input.mp4 out.mp4 -s 00:00:10 -e 00:00:20
-  ff crop input.mp4 -s 00:01:00 -e 00:02:00 --copy
+  ff crop -e 00:02:00 input.mp4
+  ff crop -s 00:00:10 -e 00:00:20 input.mp4 out.mp4
+  ff crop -s 00:01:00 -e 00:02:00 --copy input.mp4
 "
     )]
     Crop {
