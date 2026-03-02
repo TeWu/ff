@@ -49,23 +49,36 @@ ffmpeg -version
 
 ## 🔧 Installation
 
-Build from source:
+### Option 1 — Download Binary (Recommended)
+
+Download the latest binary for your platform from the [Releases](https://github.com/TeWu/ff/releases/latest) page:
+
+| Platform | File |
+|----------|------|
+| Linux (x86_64) | `ff-x86_64-unknown-linux-gnu` |
+| macOS (Intel) | `ff-x86_64-apple-darwin` |
+| macOS (Apple Silicon) | `ff-aarch64-apple-darwin` |
+| Windows | `ff-x86_64-pc-windows-msvc.exe` |
+
+**Windows:**
+
+Rename to `ff.exe` and place it somewhere on your `PATH`.
+
+**Linux / macOS:**
+
+```bash
+chmod +x ff-x86_64-unknown-linux-gnu
+mv ff-x86_64-unknown-linux-gnu ~/.local/bin/ff
+```
+
+### Option 2 — Build from Source
+
+Requires [Rust](https://rustup.rs) to be installed.
 
 ```bash
 git clone https://github.com/TeWu/ff.git
 cd ff
 cargo build --release
-```
-
-Binary will be available at:
-
-```bash
-target/release/ff
-```
-
-You can move it somewhere in your PATH:
-
-```bash
 mv target/release/ff ~/.local/bin/
 ```
 
