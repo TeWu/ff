@@ -171,11 +171,15 @@ ff crop -s 00:01:00 -e 00:02:00 --copy input.mp4
 
 ## 🔊 Loudness Processing
 
-Two different workflows:
+Two different modes:
 
 ### `dyn` — Dynamic Normalization (Speech / Podcasts)
 
 Applies loudness normalization (EBU R128 via `loudnorm`). Quieter parts get louder and peaks are tamed. Does **not** preserve original sound dynamics. Best for speech and podcasts.
+
+```bash
+ff loud dyn [-I] <INPUT> [OUTPUT]
+```
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -184,17 +188,23 @@ Applies loudness normalization (EBU R128 via `loudnorm`). Quieter parts get loud
 ```bash
 ff loud dyn speech.mp3
 ff loud dyn -I -9 speech.mp3
+ff loud dyn -I -11 speech.mp3 out.mp3
 ```
 
 ### `lim` — Percentile-Based Limiting (Music)
 
 Applies a steady volume boost so that a given, small percentage of samples hit a limiter. Preserves dynamics. Best for music.
 
+```bash
+ff loud lim [--top] <INPUT> [OUTPUT]
+```
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--top` | `0` | Percentage of loudest samples to push against the limiter |
 
 ```bash
+ff loud lim music.mp3
 ff loud lim --top 5 music.mp3
 ff loud lim --top 20 music.mp3 out.mp3
 ```
