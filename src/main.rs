@@ -26,6 +26,7 @@ const MY_STYLES: Styles = Styles::styled()
     bin_name = "ff",
     version,
     about = "Practical ffmpeg wrapper",
+    author = "TeWu",
     styles = MY_STYLES
 )]
 struct Cli {
