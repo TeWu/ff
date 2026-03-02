@@ -102,7 +102,7 @@ By default this performs precise trimming (re-encoding).
 Use --copy for fast keyframe-aligned trimming without re-encoding.
 
 Examples:
-  ff crop input.mp4 -s 00:01:00 -e 00:02:00
+  ff crop input.mp4 -e 00:02:00
   ff crop input.mp4 out.mp4 -s 00:00:10 -e 00:00:20
   ff crop input.mp4 -s 00:01:00 -e 00:02:00 --copy
 "
@@ -114,13 +114,13 @@ Examples:
         #[arg(help = "Output media file.\n  Default: `<INPUT_BASENAME>_cropped.<original extension>`.")]
         output: Option<String>,
 
-        #[arg(help = "Start timestamp (HH:MM:SS).")]
+        #[arg(help = "Start timestamp (HH:MM:SS).\n  Default: beginning of file.")]
         #[arg(short, long)]
-        start: String,
+        start: Option<String>,
 
-        #[arg(help = "End timestamp (HH:MM:SS).")]
+        #[arg(help = "End timestamp (HH:MM:SS).\n  Default: end of file.")]
         #[arg(short, long)]
-        end: String,
+        end: Option<String>,
 
         #[arg(help = "Fast mode (no re-encode, cuts only on keyframes).")]
         #[arg(long)]
@@ -135,20 +135,27 @@ Examples:
 Modes:\n
   dyn   Dynamic normalization - quiets are louder, peaks are tamed.
           Does NOT preserve original dynamics. Best for speech/podcasts.\n
+          Use -I to control target integrated loudness in LUFS.\n
   lim   Applies a steady boost, so that <PERCENT>% of samples hit the limiter.
           Keeps dynamics intact. Best for music.\n
+          Use --top to set the percentile.\n
 \n
 Examples:\n
-  ff loud dyn music.mp3\n
-  ff loud lim music.mp3 5"
+  ff loud dyn speech.mp3\n
+  ff loud dyn music.mp3 -I -9
+  ff loud lim --top 5 music.mp3
+  ff loud lim --top 20 music.mp3 out.mp3"
     )]
     Loud {
         #[arg(value_enum)]
         mode: LoudMode,
         input: String,
         output: Option<String>,
-        #[arg(default_value = "0")]
+        #[arg(long = "top", default_value = "0")]
         percent: f64,
+        #[arg(short = 'I', long = "integrated", default_value = "-14",
+          help = "Target integrated loudness in LUFS (dyn mode only). Range: -70 to -5.")]
+        integrated: f64,
     },
 
     /// Generate shell completions.
@@ -224,23 +231,35 @@ impl Commands {
                     .run()
             }
             Commands::Crop { input, output, start, end, copy } => {
-                validate_time(start)?; validate_time(end)?;
+                if let Some(s) = start { validate_time(s)?; }
+                if let Some(e) = end   { validate_time(e)?; }
                 let output = output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_cropped"));
+                let start = start.as_deref().unwrap_or("0");
+
                 let f = Ffmpeg::new(force);
                 if *copy {
-                    f.args(["-ss", start, "-to", end, "-i", input, "-c", "copy", "-avoid_negative_ts", "1", &output])
-                        .run()
+                    let mut args = vec!["-ss", start, "-i", input, "-c", "copy", "-avoid_negative_ts", "1"];
+                    if let Some(e) = end { args.extend(["-to", e]); }
+                    args.push(&output);
+                    f.args(args).run()
+                } else if is_audio_only(input) {
+                    let mut args = vec!["-i", input, "-ss", start];
+                    if let Some(e) = end { args.extend(["-to", e]); }
+                    args.extend(["-c:a", "libmp3lame", "-q:a", "2", &output]);
+                    f.args(args).run()
                 } else {
-                    f.args(["-i", input, "-ss", start, "-to", end, "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-c:a", "aac", &output])
-                        .run()
+                    let mut args = vec!["-i", input, "-ss", start];
+                    if let Some(e) = end { args.extend(["-to", e]); }
+                    args.extend(["-c:v", "libx264", "-preset", "slow", "-crf", "23", "-c:a", "aac", &output]);
+                    f.args(args).run()
                 }
             }
-            Commands::Loud { mode, input, output, percent } => {
+            Commands::Loud { mode, input, output, percent, integrated } => {
                 let output = output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_loud"));
                 match mode {
                     LoudMode::Dyn =>
                         Ffmpeg::new(force)
-                            .args(["-i", input, "-af", "dynaudnorm=p=0.95:m=100", &output])
+                            .args(["-i", input, "-af", &format!("loudnorm=I={}:TP=-1:LRA=11", integrated), &output])
                             .run(),
                     LoudMode::Lim => {
                         println!("--- Analyzing Audio (Targeting top {}% samples) ---", percent);
@@ -340,6 +359,15 @@ fn build_filename(base: &Path, stem: &str, ext: &str) -> String {
     let mut new = PathBuf::from(base.parent().unwrap_or(Path::new("")));
     new.push(format!("{stem}.{ext}"));
     new.to_string_lossy().into_owned()
+}
+
+fn is_audio_only(input: &str) -> bool {
+    let ext = Path::new(input)
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    matches!(ext.as_str(), "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" | "wma")
 }
 
 fn map_shell(shell: &CompletionShell) -> Shell {
