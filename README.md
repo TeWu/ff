@@ -11,7 +11,7 @@ It wraps common media operations into clean subcommands so you don’t have to l
 Because nobody remembers commands like:
 
 ```
-ffmpeg -i input.mp4 -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac output.mp4
+ffmpeg -i input.mp4 -i second_input.mp4 -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac output.mp4
 ```
 
 ...but we run them constantly.
