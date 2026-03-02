@@ -4,7 +4,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 // -----------------------------------------------------------------------------
 // CLI STYLING
@@ -134,6 +134,30 @@ Examples:
         copy: bool,
     },
 
+    /// Increase volume using dynamic normalization or percentile-based limiting.
+    #[command(
+        override_usage = "ff loud <MODE> <INPUT> [OUTPUT] [PERCENT]",
+        after_help = "\
+Modes:\n
+  dyn   Dynamic normalization - quiets are louder, peaks are tamed.
+          Does NOT preserve original dynamics. Best for speech/podcasts.\n
+  lim   Applies a steady boost, so that <PERCENT>% of samples hit the limiter.
+          Keeps dynamics intact. Best for music.\n
+\n
+Examples:\n
+  ff loud dyn music.mp3\n
+  ff loud lim music.mp3 5"
+    )]
+    Loud {
+        #[arg(value_enum)]
+        mode: LoudMode,
+        input: String,
+        output: Option<String>,
+        /// For 'lim' mode: % of loudest samples to be limited (default: 0).
+        #[arg(default_value = "0")]
+        percent: f64,
+    },
+
     /// Generate shell completions.
     #[command(
         override_usage = "ff completions <SHELL>",
@@ -151,12 +175,10 @@ For Git Bash use:
 }
 
 #[derive(ValueEnum, Clone)]
-enum CompletionShell {
-    Bash,
-    Zsh,
-    Fish,
-    PowerShell,
-}
+enum LoudMode { Dyn, Lim }
+
+#[derive(ValueEnum, Clone)]
+enum CompletionShell { Bash, Zsh, Fish, PowerShell }
 
 // -----------------------------------------------------------------------------
 // MAIN
@@ -164,20 +186,20 @@ enum CompletionShell {
 
 fn main() -> Result<()> {
     ensure_ffmpeg_installed()?;
-
     let cli = Cli::parse();
 
     match &cli.command {
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             generate(map_shell(shell), &mut cmd, "ff", &mut io::stdout());
-            return Ok(());
+            Ok(())
         }
-        _ => cli.command.execute(cli.force)?,
+        _ => {
+            cli.command.execute(cli.force)?;
+            println!("✅ Done!");
+            Ok(())
+        }
     }
-
-    println!("✅ Done!");
-    Ok(())
 }
 
 // -----------------------------------------------------------------------------
@@ -189,85 +211,74 @@ impl Commands {
         match self {
             Commands::Extract { input, output } => {
                 let output = output.clone().unwrap_or_else(|| replace_ext(input, "mp3"));
-
                 Ffmpeg::new(force)
-                    .args(["-i", input])
-                    .args(["-vn", "-acodec", "libmp3lame", "-q:a", "2", &output])
+                    .args(["-i", input, "-vn", "-acodec", "libmp3lame", "-q:a", "2", &output])
                     .run()
             }
-
-            Commands::Split {
-                input,
-                video_output,
-                audio_output,
-            } => {
-                let video_out =
-                    video_output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_split"));
-                let audio_out =
-                    audio_output.clone().unwrap_or_else(|| postfix_with_ext(input, "_split", "mp3"));
-
+            Commands::Split { input, video_output, audio_output } => {
+                let v_out = video_output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_split"));
+                let a_out = audio_output.clone().unwrap_or_else(|| postfix_with_ext(input, "_split", "mp3"));
                 Ffmpeg::new(force)
-                    .args(["-i", input])
-                    .args(["-c:v", "copy", "-an", &video_out])
-                    .args(["-c:a", "libmp3lame", "-q:a", "2", "-vn", &audio_out])
+                    .args(["-i", input, "-c:v", "copy", "-an", &v_out])
+                    .args(["-c:a", "libmp3lame", "-q:a", "2", "-vn", &a_out])
                     .run()
             }
-
-            Commands::Merge {
-                video,
-                audio,
-                output,
-            } => {
-                let output =
-                    output.clone().unwrap_or_else(|| postfix_with_same_ext(video, "_merged"));
-
+            Commands::Merge { video, audio, output } => {
+                let output = output.clone().unwrap_or_else(|| postfix_with_same_ext(video, "_merged"));
                 Ffmpeg::new(force)
-                    .args(["-i", video])
-                    .args(["-i", audio])
-                    .args(["-c", "copy", "-map", "0:v:0", "-map", "1:a:0", &output])
+                    .args(["-i", video, "-i", audio, "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", &output])
                     .run()
             }
-
-            Commands::Crop {
-                input,
-                output,
-                start,
-                end,
-                copy,
-            } => {
-                validate_time(start)?;
-                validate_time(end)?;
-
-                let output =
-                    output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_cropped"));
-
+            Commands::Crop { input, output, start, end, copy } => {
+                validate_time(start)?; validate_time(end)?;
+                let output = output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_cropped"));
+                let f = Ffmpeg::new(force);
                 if *copy {
-                    Ffmpeg::new(force)
-                        .args(["-ss", start, "-to", end])
-                        .args(["-i", input])
-                        .args(["-c", "copy", "-avoid_negative_ts", "1", &output])
+                    f.args(["-ss", start, "-to", end, "-i", input, "-c", "copy", "-avoid_negative_ts", "1", &output])
                         .run()
                 } else {
-                    Ffmpeg::new(force)
-                        .args(["-i", input])
-                        .args(["-ss", start, "-to", end])
-                        .args([
-                            "-c:v",
-                            "libx264",
-                            "-preset",
-                            "slow",
-                            "-crf",
-                            "23",
-                            "-c:a",
-                            "aac",
-                            "-movflags",
-                            "+faststart",
-                            &output,
-                        ])
+                    f.args(["-i", input, "-ss", start, "-to", end, "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-c:a", "aac", &output])
                         .run()
                 }
             }
+            Commands::Loud { mode, input, output, percent } => {
+                let output = output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_loud"));
+                match mode {
+                    LoudMode::Dyn =>
+                        Ffmpeg::new(force)
+                            .args(["-i", input, "-af", "dynaudnorm=p=0.95:m=100", &output])
+                            .run(),
+                    LoudMode::Lim => {
+                        println!("--- Analyzing Audio (Targeting top {}% samples) ---", percent);
+                        let stats = Ffmpeg::new(false).args(["-i", input, "-af", "volumedetect", "-f", "null", "-"]).capture()?;
 
+                        let mut hist: Vec<(u32, u64)> = stats.lines()
+                            .filter(|l| l.contains("histogram_"))
+                            .filter_map(|l| {
+                                let p: Vec<&str> = l.split_whitespace().collect();
+                                let db = p.get(1)?.strip_prefix("histogram_")?.strip_suffix("db:")?.parse().ok()?;
+                                let count = p.get(2)?.parse().ok()?;
+                                Some((db, count))
+                            }).collect();
+
+                        hist.sort_by_key(|h| h.0);
+                        let total: u64 = hist.iter().map(|h| h.1).sum();
+                        let target_count = (total as f64 * (percent / 100.0)) as u64;
+
+                        let mut current = 0;
+                        let boost = hist.iter().find_map(|(db, count)| {
+                            current += count;
+                            if current >= target_count { Some(*db) } else { None }
+                        }).unwrap_or(0);
+
+                        println!("Calculated Boost: {} dB", boost);
+                        let filter = format!("volume={}dB,alimiter=limit=0.98:attack=5:release=50", boost);
+                        Ffmpeg::new(force)
+                            .args(["-i", input, "-af", &filter, &output])
+                            .run()
+                    }
+                }
+            }
             Commands::Completions { .. } => unreachable!(),
         }
     }
@@ -277,39 +288,28 @@ impl Commands {
 // FFMPEG BUILDER
 // -----------------------------------------------------------------------------
 
-struct Ffmpeg {
-    args: Vec<String>,
-}
+struct Ffmpeg { args: Vec<String> }
 
 impl Ffmpeg {
     fn new(force: bool) -> Self {
         let mut args = Vec::new();
-        if force {
-            args.push("-y".into());
-        }
+        if force { args.push("-y".into()); }
         Self { args }
     }
 
-    fn args<I, S>(mut self, args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
+    fn args<I, S>(mut self, args: I) -> Self where I: IntoIterator<Item = S>, S: Into<String> {
         self.args.extend(args.into_iter().map(Into::into));
         self
     }
 
     fn run(self) -> Result<()> {
-        let status = Command::new("ffmpeg")
-            .args(&self.args)
-            .status()
-            .context("Failed to start ffmpeg")?;
+        let status = Command::new("ffmpeg").args(&self.args).status().context("FFmpeg failed")?;
+        if status.success() { Ok(()) } else { bail!("FFmpeg error.") }
+    }
 
-        if status.success() {
-            Ok(())
-        } else {
-            bail!("ffmpeg exited with an error.")
-        }
+    fn capture(self) -> Result<String> {
+        let out = Command::new("ffmpeg").args(&self.args).stderr(Stdio::piped()).output()?;
+        Ok(String::from_utf8_lossy(&out.stderr).to_string())
     }
 }
 
@@ -318,41 +318,28 @@ impl Ffmpeg {
 // -----------------------------------------------------------------------------
 
 fn ensure_ffmpeg_installed() -> Result<()> {
-    if Command::new("ffmpeg").arg("-version").output().is_err() {
-        bail!("ffmpeg not found in PATH.");
-    }
-    Ok(())
+    Command::new("ffmpeg").arg("-version").output().map(|_| ()).map_err(|_| anyhow::anyhow!("ffmpeg not found"))
 }
 
 fn validate_time(t: &str) -> Result<()> {
-    if !t.contains(':') {
-        bail!("Invalid time '{t}', expected HH:MM:SS.");
-    }
-    Ok(())
+    if !t.contains(':') { bail!("Expected HH:MM:SS"); } Ok(())
 }
 
-// -----------------------------------------------------------------------------
-// FILENAME HELPERS
-// -----------------------------------------------------------------------------
-
 fn replace_ext(input: &str, new_ext: &str) -> String {
-    Path::new(input)
-        .with_extension(new_ext)
-        .to_string_lossy()
-        .into_owned()
+    Path::new(input).with_extension(new_ext).to_string_lossy().into_owned()
 }
 
 fn postfix_with_same_ext(input: &str, postfix: &str) -> String {
-    let path = Path::new(input);
-    let stem = path.file_stem().unwrap().to_string_lossy();
-    let ext = path.extension().unwrap_or_default().to_string_lossy();
-    build_filename(path, &format!("{stem}{postfix}"), &ext)
+    let p = Path::new(input);
+    let stem = p.file_stem().unwrap().to_string_lossy();
+    let ext = p.extension().unwrap_or_default().to_string_lossy();
+    build_filename(p, &format!("{stem}{postfix}"), &ext)
 }
 
 fn postfix_with_ext(input: &str, postfix: &str, ext: &str) -> String {
-    let path = Path::new(input);
-    let stem = path.file_stem().unwrap().to_string_lossy();
-    build_filename(path, &format!("{stem}{postfix}"), ext)
+    let p = Path::new(input);
+    let stem = p.file_stem().unwrap().to_string_lossy();
+    build_filename(p, &format!("{stem}{postfix}"), ext)
 }
 
 fn build_filename(base: &Path, stem: &str, ext: &str) -> String {
@@ -360,10 +347,6 @@ fn build_filename(base: &Path, stem: &str, ext: &str) -> String {
     new.push(format!("{stem}.{ext}"));
     new.to_string_lossy().into_owned()
 }
-
-// -----------------------------------------------------------------------------
-// COMPLETION MAPPING
-// -----------------------------------------------------------------------------
 
 fn map_shell(shell: &CompletionShell) -> Shell {
     match shell {
