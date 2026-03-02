@@ -262,30 +262,44 @@ impl Commands {
                             .args(["-i", input, "-af", &format!("loudnorm=I={}:TP=-1:LRA=11", integrated), &output])
                             .run(),
                     LoudMode::Lim => {
-                        println!("--- Analyzing Audio (Targeting top {}% samples) ---", percent);
                         let stats = Ffmpeg::new(false).args(["-i", input, "-af", "volumedetect", "-f", "null", "-"]).capture()?;
 
-                        let mut hist: Vec<(u32, u64)> = stats.lines()
+                        let hist: Vec<(u32, u64)> = stats.lines()
                             .filter(|l| l.contains("histogram_"))
                             .filter_map(|l| {
                                 let p: Vec<&str> = l.split_whitespace().collect();
-                                let db = p.get(1)?.strip_prefix("histogram_")?.strip_suffix("db:")?.parse().ok()?;
-                                let count = p.get(2)?.parse().ok()?;
+                                let db = p.get(3)?.strip_prefix("histogram_")?.strip_suffix("db:")?.parse().ok()?;
+                                let count = p.get(4)?.parse().ok()?;
                                 Some((db, count))
                             }).collect();
 
-                        hist.sort_by_key(|h| h.0);
-                        let total: u64 = hist.iter().map(|h| h.1).sum();
-                        let target_count = (total as f64 * (percent / 100.0)) as u64;
-
-                        let mut current = 0;
-                        let boost = hist.iter().find_map(|(db, count)| {
-                            current += count;
-                            if current >= target_count { Some(*db) } else { None }
-                        }).unwrap_or(0);
+                        let boost = if *percent == 0.0 {
+                            println!("--- Analyzing Audio (No limiting, boosting to 0 dBFS) ---");
+                            let max_volume = stats.lines()
+                                .find(|l| l.contains("max_volume:"))
+                                .and_then(|l| l.split_whitespace().nth(4))
+                                .and_then(|v| v.parse::<f64>().ok())
+                                .unwrap_or(0.0);
+                            (-max_volume) as u32
+                        } else {
+                            println!("--- Analyzing Audio (Targeting top {}% samples) ---", percent);
+                            let mut hist = hist;
+                            hist.sort_by_key(|h| std::cmp::Reverse(h.0));
+                            let total: u64 = hist.iter().map(|h| h.1).sum();
+                            let target_count = (total as f64 * (percent / 100.0)) as u64;
+                            let mut current = 0u64;
+                            hist.iter().find_map(|(db, count)| {
+                                current += count;
+                                if current >= target_count { Some(*db) } else { None }
+                            }).unwrap_or(0)
+                        };
 
                         println!("Calculated Boost: {} dB", boost);
-                        let filter = format!("volume={}dB,alimiter=limit=0.98:attack=5:release=50", boost);
+                        let filter = if *percent == 0.0 {
+                            format!("volume={}dB", boost)
+                        } else {
+                            format!("volume={}dB,alimiter=limit=0.98:attack=5:release=50", boost)
+                        };
                         Ffmpeg::new(force)
                             .args(["-i", input, "-af", &filter, &output])
                             .run()
