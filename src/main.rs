@@ -284,7 +284,7 @@ impl Commands {
 
                 let f = Ffmpeg::new(force);
                 if *copy {
-                    let mut args = vec!["-ss", start, "-i", input, "-c", "copy", "-avoid_negative_ts", "1"];
+                    let mut args = vec!["-i", input, "-ss", start, "-c", "copy", "-avoid_negative_ts", "1"];
                     if let Some(e) = end { args.extend(["-to", e]); }
                     args.push(&output);
                     f.args(args).run()
