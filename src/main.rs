@@ -23,7 +23,6 @@ const MY_STYLES: Styles = Styles::styled()
 #[command(name = "ff", version, about = "Practical ffmpeg wrapper", styles = MY_STYLES)]
 struct Cli {
     /// Overwrite output files without asking (passes `-y` to ffmpeg).
-    ///
     /// If not provided, ffmpeg's native interactive prompt is shown.
     #[arg(long, global = true)]
     force: bool,
@@ -36,6 +35,7 @@ struct Cli {
 enum Commands {
     /// Extract audio track from a media file.
     #[command(
+        verbatim_doc_comment,
         override_usage = "ff extract <INPUT> [OUTPUT]",
         after_help = "\
 Examples:
@@ -44,17 +44,16 @@ Examples:
 "
     )]
     Extract {
-        /// Input media file (video or audio/video container).
+        #[arg(help = "Input media file (video or audio/video container).")]
         input: String,
 
-        /// Optional output MP3 file.
-        ///
-        /// Default: `<INPUT_BASENAME>.mp3`
+        #[arg(help = "Output audio file.\n  Default: `<INPUT_BASENAME>.mp3`.")]
         output: Option<String>,
     },
 
     /// Split into separate video-only and audio-only files.
     #[command(
+        verbatim_doc_comment,
         override_usage = "ff split <INPUT> [VIDEO_OUTPUT] [AUDIO_OUTPUT]",
         after_help = "\
 Examples:
@@ -63,22 +62,19 @@ Examples:
 "
     )]
     Split {
-        /// Input media file.
+        #[arg(help = "Input video file.")]
         input: String,
 
-        /// Optional video-only output.
-        ///
-        /// Default: `<INPUT_BASENAME>_split.<original extension>`
+        #[arg(help = "Video-only output.\n  Default: `<INPUT_BASENAME>_split.<original extension>`.")]
         video_output: Option<String>,
 
-        /// Optional audio-only output.
-        ///
-        /// Default: `<INPUT_BASENAME>_split.mp3`
+        #[arg(help = "Audio-only output.\n  Default: `<INPUT_BASENAME>_split.mp3`.")]
         audio_output: Option<String>,
     },
 
     /// Merge a video file and an audio file into one container.
     #[command(
+        verbatim_doc_comment,
         override_usage = "ff merge <VIDEO> <AUDIO> [OUTPUT]",
         after_help = "\
 Examples:
@@ -87,20 +83,19 @@ Examples:
 "
     )]
     Merge {
-        /// Video stream source.
+        #[arg(help = "Video stream source.")]
         video: String,
 
-        /// Audio stream source.
+        #[arg(help = "Audio stream source.")]
         audio: String,
 
-        /// Optional merged output file.
-        ///
-        /// Default: `<VIDEO_BASENAME>_merged.<video extension>`
+        #[arg(help = "Merged output file.\n  Default: `<VIDEO_BASENAME>_merged.<video extension>`.")]
         output: Option<String>,
     },
 
     /// Crop a time range from a media file.
     #[command(
+        verbatim_doc_comment,
         override_usage = "ff crop <INPUT> [OUTPUT] -s <START> -e <END> [--copy]",
         after_help = "\
 By default this performs precise trimming (re-encoding).
@@ -113,29 +108,28 @@ Examples:
 "
     )]
     Crop {
-        /// Input media file.
+        #[arg(help = "Input media file.")]
         input: String,
 
-        /// Optional output file.
-        ///
-        /// Default: `<INPUT_BASENAME>_cropped.<original extension>`
+        #[arg(help = "Output media file.\n  Default: `<INPUT_BASENAME>_cropped.<original extension>`.")]
         output: Option<String>,
 
-        /// Start timestamp (HH:MM:SS).
+        #[arg(help = "Start timestamp (HH:MM:SS).")]
         #[arg(short, long)]
         start: String,
 
-        /// End timestamp (HH:MM:SS).
+        #[arg(help = "End timestamp (HH:MM:SS).")]
         #[arg(short, long)]
         end: String,
 
-        /// Fast mode (no re-encode, cuts only on keyframes).
+        #[arg(help = "Fast mode (no re-encode, cuts only on keyframes).")]
         #[arg(long)]
         copy: bool,
     },
 
     /// Increase volume using dynamic normalization or percentile-based limiting.
     #[command(
+        verbatim_doc_comment,
         override_usage = "ff loud <MODE> <INPUT> [OUTPUT] [PERCENT]",
         after_help = "\
 Modes:\n
@@ -153,13 +147,13 @@ Examples:\n
         mode: LoudMode,
         input: String,
         output: Option<String>,
-        /// For 'lim' mode: % of loudest samples to be limited (default: 0).
         #[arg(default_value = "0")]
         percent: f64,
     },
 
     /// Generate shell completions.
     #[command(
+        verbatim_doc_comment,
         override_usage = "ff completions <SHELL>",
         after_help = "\
 For Git Bash use:
@@ -168,7 +162,7 @@ For Git Bash use:
 "
     )]
     Completions {
-        /// Target shell.
+        #[arg(help = "Target shell.")]
         #[arg(value_enum)]
         shell: CompletionShell,
     },
