@@ -20,7 +20,13 @@ const MY_STYLES: Styles = Styles::styled()
 // -----------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "ff", version, about = "Practical ffmpeg wrapper", styles = MY_STYLES)]
+#[command(
+    name = "ff",
+    bin_name = "ff",
+    version,
+    about = "Practical ffmpeg wrapper",
+    styles = MY_STYLES
+)]
 struct Cli {
     /// Overwrite output files without asking (passes `-y` to ffmpeg).
     /// If not provided, ffmpeg's native interactive prompt is shown.
@@ -132,17 +138,17 @@ Examples:
         verbatim_doc_comment,
         override_usage = "ff loud <MODE> <INPUT> [OUTPUT] [PERCENT]",
         after_help = "\
-Modes:\n
+Modes:
   dyn   Dynamic normalization - quiets are louder, peaks are tamed.
-          Does NOT preserve original dynamics. Best for speech/podcasts.\n
-          Use -I to control target integrated loudness in LUFS.\n
+          Does NOT preserve original dynamics. Best for speech/podcasts.
+          Use -I to control target integrated loudness in LUFS.
   lim   Applies a steady boost, so that <PERCENT>% of samples hit the limiter.
-          Keeps dynamics intact. Best for music.\n
-          Use --top to set the percentile.\n
-\n
-Examples:\n
-  ff loud dyn speech.mp3\n
-  ff loud dyn music.mp3 -I -9
+          Keeps dynamics intact. Best for music.
+          Use --top to set the percentile.
+
+Examples:
+  ff loud dyn speech.mp3
+  ff loud dyn -I -9 speech.mp3
   ff loud lim --top 5 music.mp3
   ff loud lim --top 20 music.mp3 out.mp3"
     )]
