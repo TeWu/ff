@@ -2,6 +2,15 @@
 name = "ff"
 version = "0.1.0"
 edition = "2024"
+authors = ["TeWu"]
+description = "Practical ffmpeg wrapper - common media operations as simple subcommands"
+repository = "https://github.com/TeWu/ff"
+homepage = "https://github.com/TeWu/ff"
+readme = "README.md"
+license = "MIT"
+keywords = ["ffmpeg", "video", "audio", "media", "cli"]
+categories = ["multimedia::video", "multimedia::audio", "command-line-utilities"]
+exclude = [".github"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
