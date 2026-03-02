@@ -4,6 +4,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -16,7 +19,7 @@ jobs:
             target: x86_64-apple-darwin
             artifact: ff
           - os: macos-latest
-            target: aarch64-apple-darwin   # Apple Silicon
+            target: aarch64-apple-darwin
             artifact: ff
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -29,6 +32,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }}
+      - name: Rename artifact
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact }} \
+             ff-${{ matrix.target }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
       - uses: softprops/action-gh-release@v1
         with:
-          files: target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          files: ff-${{ matrix.target }}*
