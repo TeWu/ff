@@ -1,6 +1,6 @@
 [package]
 name = "ff"
-version = "0.1.1"
+version = "0.1.1-dev"
 edition = "2024"
 authors = ["TeWu"]
 description = "Practical ffmpeg wrapper - common media operations as simple subcommands"
