@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
+use std::cmp::Reverse;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -55,6 +56,27 @@ Examples:
 
         #[arg(help = "Output audio file.\n  Default: `<INPUT_BASENAME>.mp3`.")]
         output: Option<String>,
+    },
+
+    /// Convert a media file to a different format.
+    #[command(
+        verbatim_doc_comment,
+        override_usage = "ff convert <INPUT> <OUTPUT>",
+        after_help = "\
+Format is determined by the output file extension.
+
+Examples:
+  ff convert input.flac output.mp3
+  ff convert input.mov output.mp4
+  ff convert input.mp4 output.webm
+"
+    )]
+    Convert {
+        #[arg(help = "Input file.")]
+        input: String,
+
+        #[arg(help = "Output file (extension determines format).")]
+        output: String,
     },
 
     /// Split into separate video-only and audio-only files.
@@ -136,7 +158,7 @@ Examples:
     /// Increase volume using dynamic normalization or percentile-based limiting.
     #[command(
         verbatim_doc_comment,
-        override_usage = "ff loud <MODE> <INPUT> [OUTPUT] [PERCENT]",
+        override_usage = "ff loud <MODE> [OPTIONS] <INPUT> [OUTPUT]",
         after_help = "\
 Modes:
   dyn   Dynamic normalization - quiets are louder, peaks are tamed.
@@ -222,6 +244,10 @@ impl Commands {
                     .args(["-i", input, "-vn", "-acodec", "libmp3lame", "-q:a", "2", &output])
                     .run()
             }
+            Commands::Convert { input, output } =>
+                Ffmpeg::new(force)
+                    .args(["-i", input, output])
+                    .run(),
             Commands::Split { input, video_output, audio_output } => {
                 let v_out = video_output.clone().unwrap_or_else(|| postfix_with_same_ext(input, "_split"));
                 let a_out = audio_output.clone().unwrap_or_else(|| postfix_with_ext(input, "_split", "mp3"));
@@ -232,9 +258,23 @@ impl Commands {
             }
             Commands::Merge { video, audio, output } => {
                 let output = output.clone().unwrap_or_else(|| postfix_with_same_ext(video, "_merged"));
-                Ffmpeg::new(force)
-                    .args(["-i", video, "-i", audio, "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", &output])
-                    .run()
+                let out_ext = Path::new(&output).extension().unwrap_or_default().to_string_lossy().to_lowercase();
+                let audio_codec = probe_audio_codec(audio).unwrap_or_default();
+                let incompatible = matches!(
+                    (out_ext.as_str(), audio_codec.as_str()),
+                    ("mp4" | "mov" | "m4v", "vorbis" | "flac" | "opus" | "alac") |
+                    ("webm",                "aac" | "mp3" | "ac3" | "eac3")
+                );
+                if incompatible {
+                    println!("⚠️  Audio codec '{}' is incompatible with .{}, re-encoding to AAC.", audio_codec, out_ext);
+                    Ffmpeg::new(force)
+                        .args(["-i", video, "-i", audio, "-c:v", "copy", "-c:a", "aac", "-map", "0:v:0", "-map", "1:a:0", &output])
+                        .run()
+                } else {
+                    Ffmpeg::new(force)
+                        .args(["-i", video, "-i", audio, "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", &output])
+                        .run()
+                }
             }
             Commands::Crop { input, output, start, end, copy } => {
                 if let Some(s) = start { validate_time(s)?; }
@@ -251,12 +291,26 @@ impl Commands {
                 } else if is_audio_only(input) {
                     let mut args = vec!["-i", input, "-ss", start];
                     if let Some(e) = end { args.extend(["-to", e]); }
-                    args.extend(["-c:a", "libmp3lame", "-q:a", "2", &output]);
+                    let (aenc, a_quality): (&str, &[&str]) = audio_encoder_args(input);
+                    args.extend(["-c:a", aenc]);
+                    args.extend(a_quality.iter().copied());
+                    args.push(&output);
                     f.args(args).run()
                 } else {
                     let mut args = vec!["-i", input, "-ss", start];
                     if let Some(e) = end { args.extend(["-to", e]); }
-                    args.extend(["-c:v", "libx264", "-preset", "slow", "-crf", "23", "-c:a", "aac", &output]);
+                    let (venc, v_quality): (&str, &[&str]) = match probe_video_codec(input).as_deref() {
+                        Some("hevc") => ("libx265",    &["-preset", "slow", "-crf", "28"]),
+                        Some("vp9")  => ("libvpx-vp9", &["-crf", "33", "-b:v", "0"]),
+                        Some("av1")  => { println!("⚠️  AV1 encoding is very slow. Consider using --copy or re-encoding to a faster codec."); ("libaom-av1", &["-crf", "35", "-b:v", "0"]) },
+                        _            => ("libx264",    &["-preset", "slow", "-crf", "23"]),
+                    };
+                    let (aenc, a_quality): (&str, &[&str]) = audio_encoder_args(input);
+                    args.extend(["-c:v", venc]);
+                    args.extend(v_quality.iter().copied());
+                    args.extend(["-c:a", aenc]);
+                    args.extend(a_quality.iter().copied());
+                    args.push(&output);
                     f.args(args).run()
                 }
             }
@@ -270,7 +324,7 @@ impl Commands {
                     LoudMode::Lim => {
                         let stats = Ffmpeg::new(false).args(["-i", input, "-af", "volumedetect", "-f", "null", "-"]).capture()?;
 
-                        let hist: Vec<(u32, u64)> = stats.lines()
+                        let mut hist: Vec<(u32, u64)> = stats.lines()
                             .filter(|l| l.contains("histogram_"))
                             .filter_map(|l| {
                                 let p: Vec<&str> = l.split_whitespace().collect();
@@ -289,8 +343,7 @@ impl Commands {
                             (-max_volume) as u32
                         } else {
                             println!("--- Analyzing Audio (Targeting top {}% samples) ---", percent);
-                            let mut hist = hist;
-                            hist.sort_by_key(|h| std::cmp::Reverse(h.0));
+                            hist.sort_by_key(|h| Reverse(h.0));
                             let total: u64 = hist.iter().map(|h| h.1).sum();
                             let target_count = (total as f64 * (percent / 100.0)) as u64;
                             let mut current = 0u64;
@@ -388,6 +441,31 @@ fn is_audio_only(input: &str) -> bool {
         .to_string_lossy()
         .to_lowercase();
     matches!(ext.as_str(), "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" | "wma")
+}
+
+fn probe_codec(file: &str, stream: &str) -> Option<String> {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", stream,
+               "-show_entries", "stream=codec_name",
+               "-of", "default=noprint_wrappers=1:nokey=1", file])
+        .output().ok()?;
+    let codec = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if codec.is_empty() { None } else { Some(codec) }
+}
+
+fn probe_video_codec(file: &str) -> Option<String> { probe_codec(file, "v:0") }
+fn probe_audio_codec(file: &str) -> Option<String> { probe_codec(file, "a:0") }
+
+fn audio_encoder_args(file: &str) -> (&'static str, &'static [&'static str]) {
+    match probe_audio_codec(file).as_deref() {
+        Some("mp3")    => ("libmp3lame", &["-q:a", "2"]),
+        Some("opus")   => ("libopus",    &["-b:a", "128k"]),
+        Some("vorbis") => ("libvorbis",  &["-q:a", "5"]),
+        Some("flac")   => ("flac",       &[]),
+        Some("ac3")    => ("ac3",        &[]),
+        Some("eac3")   => ("eac3",       &[]),
+        _              => ("aac",        &[]),
+    }
 }
 
 fn map_shell(shell: &CompletionShell) -> Shell {
